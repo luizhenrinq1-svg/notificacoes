@@ -29,7 +29,7 @@
 
     <div id="root" class="max-w-md mx-auto min-h-screen p-4"></div>
 
-    <!-- CONFIGURAÇÃO E SHIM (Igual ao Index) -->
+    <!-- CONFIGURAÇÃO E SHIM -->
     <script>
       const API_URL = "https://script.google.com/macros/s/AKfycbyhvzFHFiUj0sSNOzD8wQft9y_yU8OuqN3SSUCfuiwYyzD8xx5JeEMSd9jjOMq-OpXTig/exec";
       const VAPID_KEY = 'BBoKkzbg5v-PjBLtxOv7oQz-o9SEcnpdYu2cAawC_2WHozRfOyYnESz_lss2yA4BGnuO76II-NbwoKUqfaEN-S0';
@@ -69,6 +69,7 @@
         const [user, setUser] = useState(null); // { id, token }
         const [loading, setLoading] = useState(false);
         const [inputLink, setInputLink] = useState('');
+        const [statusMsg, setStatusMsg] = useState('');
         
         // Status da Permissão
         const [permStatus, setPermStatus] = useState(Notification.permission);
@@ -78,15 +79,26 @@
         const [config, setConfig] = useState({ entrada: '', saida: '', antecedencia: 10 });
 
         useEffect(() => {
-          // 1. Tenta carregar usuário da memória
-          const savedAuth = localStorage.getItem(CACHE_AUTH);
-          if (savedAuth) setUser(JSON.parse(savedAuth));
+          // 1. Verifica URL primeiro (Login Automático vindo do App)
+          const params = new URLSearchParams(window.location.search);
+          const urlId = params.get('id');
+          const urlToken = params.get('token');
 
-          // 2. Carrega configuração salva
+          if (urlId && urlToken) {
+             const auth = { id: urlId, token: urlToken };
+             localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
+             setUser(auth);
+          } else {
+             // 2. Tenta carregar da memória
+             const savedAuth = localStorage.getItem(CACHE_AUTH);
+             if (savedAuth) setUser(JSON.parse(savedAuth));
+          }
+
+          // 3. Carrega configuração salva
           const savedConfig = localStorage.getItem(CACHE_NOTIF);
           if (savedConfig) setConfig(JSON.parse(savedConfig));
 
-          // 3. Verifica se já temos token
+          // 4. Verifica se já temos token ativo
           checkToken();
         }, []);
 
@@ -131,7 +143,7 @@
                    setFcmToken(token);
                    // Salva no servidor
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
-                   alert("✅ Sucesso! Seu celular está conectado para receber alertas.");
+                   alert("✅ Sucesso! Notificações ativadas no Chrome.");
                 } else {
                    alert("Erro: Não foi possível obter o endereço do dispositivo.");
                 }
@@ -157,26 +169,38 @@
                  saida: config.saida, 
                  antecedencia: config.antecedencia 
               });
-              alert("💾 Horários salvos na nuvem!");
+              setStatusMsg("Configuração salva na nuvem!");
+              setTimeout(() => setStatusMsg(''), 3000);
            } catch(e) {
-              alert("Erro ao salvar na nuvem (mas salvo no celular): " + e.message);
+              alert("Erro ao salvar na nuvem: " + e.message);
            }
            setLoading(false);
         };
 
-        const sendTestNotification = () => {
+        // Teste Local (Vibração imediata)
+        const sendLocalTest = () => {
            if (Notification.permission !== 'granted') return alert("Ative as notificações primeiro.");
-           
-           // Simula o que o SW faz
            navigator.serviceWorker.ready.then(reg => {
-              reg.showNotification("Teste de Alerta 🔔", {
-                 body: "O sistema de som e vibração está funcionando!",
+              reg.showNotification("Teste Local 🔔", {
+                 body: "Som e vibração funcionando!",
                  icon: "https://cdn-icons-png.flaticon.com/512/2983/2983818.png",
                  vibrate: [500, 200, 500, 200, 500],
                  tag: 'test-notification',
                  renotify: true
               });
            });
+        };
+
+        // Teste de Servidor (Via Google Apps Script)
+        const sendServerTest = async () => {
+           if(!user) return;
+           setLoading(true);
+           try {
+              const res = await ExternalBridge.request('testarPush', { id: user.id, token: user.token });
+              if(res.success) alert("✅ Comando enviado! Aguarde a notificação chegar.");
+              else alert("Erro: " + res.error);
+           } catch(e) { alert("Falha no teste: " + e.message); }
+           setLoading(false);
         };
 
         // --- TELA DE LOGIN (Se não identificado) ---
@@ -206,7 +230,7 @@
               <div className="card">
                  <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
                     <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
-                    Permissão do Celular
+                    Permissão do Navegador
                  </h3>
                  <div className="flex items-center justify-between mt-4">
                     <div className="text-sm">
@@ -223,10 +247,16 @@
                        <span className="text-2xl">✅</span>
                     )}
                  </div>
+                 
                  {permStatus === 'granted' && (
-                    <button onClick={sendTestNotification} className="w-full mt-4 border border-green-600 text-green-600 py-2 rounded font-bold text-sm hover:bg-green-50">
-                       Testar Som e Vibração
-                    </button>
+                    <div className="grid grid-cols-2 gap-2 mt-4">
+                       <button onClick={sendLocalTest} className="border border-gray-300 text-gray-600 py-2 rounded font-bold text-xs hover:bg-gray-50">
+                          Testar Som (Local)
+                       </button>
+                       <button onClick={sendServerTest} disabled={loading} className="border border-green-600 text-green-600 py-2 rounded font-bold text-xs hover:bg-green-50">
+                          {loading ? 'Enviando...' : 'Testar Push (Servidor)'}
+                       </button>
+                    </div>
                  )}
               </div>
 
@@ -261,10 +291,11 @@
                  <button onClick={saveConfig} disabled={loading} className="w-full mt-6 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95">
                     {loading ? 'Salvando...' : 'Salvar Configuração'}
                  </button>
+                 {statusMsg && <p className="text-center text-green-600 text-sm mt-2 font-bold fade-in">{statusMsg}</p>}
               </div>
 
               <div className="text-center">
-                 <a href="./index.html" className="text-gray-500 text-sm font-semibold underline">Voltar para o PontoWeb</a>
+                 <a href="./index.html" className="text-gray-500 text-sm font-semibold underline">Voltar para o App</a>
               </div>
 
            </div>
