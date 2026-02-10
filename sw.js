@@ -1,6 +1,6 @@
 /**
- * Service Worker para PAGINA DE NOTIFICAÇÕES (GitHub Pages /notificacoes)
- * Função Principal: Receber o Push e Abrir o App Principal
+ * Service Worker para PAGINA DE NOTIFICAÇÕES
+ * Versão: Suporte a Alerta Crítico (Vibração Intensa)
  */
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
@@ -17,24 +17,37 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
-// === LÓGICA DE BACKGROUND ===
 messaging.onBackgroundMessage((payload) => {
-  console.log('[Notificações SW] Recebido:', payload);
+  console.log('[SW] Push Recebido:', payload);
   
-  const title = payload.data?.title || "Lembrete PontoWeb";
-  const body = payload.data?.body || "Hora de bater ponto!";
+  const title = payload.data?.title || "PontoWeb";
+  const body = payload.data?.body || "Atenção ao horário!";
+  const type = payload.data?.type || "normal"; // 'normal' ou 'critical'
+
+  // Configuração padrão
+  let vibratePattern = [500, 200, 500];
+  let tag = 'ponto-alert';
+
+  // Se for CRÍTICO (15 min atrasado), vibração intensa e longa
+  if (type === 'critical') {
+     // Vibra 2s, para 1s, repete varias vezes (simulando "continuo")
+     vibratePattern = [
+       2000, 1000, 2000, 1000, 2000, 1000, 
+       2000, 1000, 2000, 1000, 2000, 1000,
+       2000, 1000, 2000, 1000, 2000, 1000
+     ];
+     tag = 'ponto-critical';
+  }
 
   const notificationOptions = {
     body: body,
     icon: 'https://cdn-icons-png.flaticon.com/512/2983/2983818.png',
     badge: 'https://cdn-icons-png.flaticon.com/512/2983/2983818.png',
-    vibrate: [500, 200, 500, 200, 500, 200, 500], // Vibração forte
-    renotify: true,
-    tag: 'ponto-alert',
-    requireInteraction: true,
+    vibrate: vibratePattern,
+    renotify: true, // Garante que toca mesmo se ja tiver notificação
+    tag: tag,
+    requireInteraction: true, // Exige que o usuário feche
     data: {
-      // ⚠️ O PULO DO GATO:
-      // Quando clicar aqui, vai abrir o OUTRO repositório (o do App)
       url: 'https://luizhenrinq1-svg.github.io/pontowebtestets/' 
     }
   };
@@ -42,23 +55,18 @@ messaging.onBackgroundMessage((payload) => {
   return self.registration.showNotification(title, notificationOptions);
 });
 
-// === AO CLICAR NA NOTIFICAÇÃO ===
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
-  
-  // URL do App Principal
   const urlToOpen = event.notification.data?.url || 'https://luizhenrinq1-svg.github.io/pontowebtestets/';
 
   event.waitUntil(
     clients.matchAll({type: 'window', includeUncontrolled: true}).then( windowClients => {
-      // Tenta achar a aba do APP aberta
       for (var i = 0; i < windowClients.length; i++) {
         var client = windowClients[i];
         if (client.url.includes("pontowebtestets") && 'focus' in client) {
           return client.focus();
         }
       }
-      // Se não achar, abre uma nova
       if (clients.openWindow) {
         return clients.openWindow(urlToOpen);
       }
