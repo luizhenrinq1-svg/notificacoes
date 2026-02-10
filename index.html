@@ -78,8 +78,8 @@
         // Configuração de Horário
         const [config, setConfig] = useState({ entrada: '', saida: '', antecedencia: 10 });
 
+        // 1. Carregamento Inicial
         useEffect(() => {
-          // 1. Verifica URL primeiro (Login Automático vindo do App)
           const params = new URLSearchParams(window.location.search);
           const urlId = params.get('id');
           const urlToken = params.get('token');
@@ -89,25 +89,35 @@
              localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
              setUser(auth);
           } else {
-             // 2. Tenta carregar da memória
              const savedAuth = localStorage.getItem(CACHE_AUTH);
              if (savedAuth) setUser(JSON.parse(savedAuth));
           }
 
-          // 3. Carrega configuração salva
           const savedConfig = localStorage.getItem(CACHE_NOTIF);
           if (savedConfig) setConfig(JSON.parse(savedConfig));
-
-          // 4. Verifica se já temos token ativo
-          checkToken();
         }, []);
 
-        const checkToken = async () => {
+        // 2. Monitoramento de Token e Auto-Correção (Novo)
+        useEffect(() => {
+           if (user) checkAndSyncToken();
+        }, [user]);
+
+        const checkAndSyncToken = async () => {
            if (Notification.permission === 'granted' && messaging) {
               try {
                  const reg = await navigator.serviceWorker.ready;
                  const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
-                 if (token) setFcmToken(token);
+                 
+                 if (token) {
+                    setFcmToken(token);
+                    // AUTO-SYNC: Atualiza o servidor silenciosamente para evitar erro UNREGISTERED
+                    if (user && user.id) {
+                       console.log("Sincronizando token automaticamente...");
+                       ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token })
+                         .then(res => console.log("Token sync OK"))
+                         .catch(e => console.warn("Token sync fail", e));
+                    }
+                 }
               } catch(e) { console.log("Token check fail", e); }
            }
         };
@@ -141,9 +151,8 @@
                 
                 if (token) {
                    setFcmToken(token);
-                   // Salva no servidor
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
-                   alert("✅ Sucesso! Notificações ativadas no Chrome.");
+                   alert("✅ Sucesso! Notificações ativadas.");
                 } else {
                    alert("Erro: Não foi possível obter o endereço do dispositivo.");
                 }
@@ -177,7 +186,6 @@
            setLoading(false);
         };
 
-        // Teste Local (Vibração imediata)
         const sendLocalTest = () => {
            if (Notification.permission !== 'granted') return alert("Ative as notificações primeiro.");
            navigator.serviceWorker.ready.then(reg => {
@@ -191,10 +199,21 @@
            });
         };
 
-        // Teste de Servidor (Via Google Apps Script)
         const sendServerTest = async () => {
            if(!user) return;
            setLoading(true);
+           
+           // Força refresh do token antes de enviar o teste
+           if (messaging) {
+              try {
+                const reg = await navigator.serviceWorker.ready;
+                const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+                if (token) {
+                   await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
+                }
+              } catch(e) {}
+           }
+
            try {
               const res = await ExternalBridge.request('testarPush', { id: user.id, token: user.token });
               if(res.success) alert("✅ Comando enviado! Aguarde a notificação chegar.");
@@ -203,7 +222,7 @@
            setLoading(false);
         };
 
-        // --- TELA DE LOGIN (Se não identificado) ---
+        // --- TELA DE LOGIN ---
         if (!user) return (
            <div className="flex flex-col items-center justify-center min-h-screen">
               <div className="card w-full text-center">
@@ -217,7 +236,7 @@
            </div>
         );
 
-        // --- TELA PRINCIPAL DE CONFIG ---
+        // --- TELA PRINCIPAL ---
         return (
            <div className="pb-10">
               <div className="text-center mb-6 mt-4">
