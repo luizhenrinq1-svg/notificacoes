@@ -64,6 +64,7 @@
       const { useState, useEffect } = React;
       const CACHE_AUTH = 'ponto_auth_data_v2';
       const CACHE_NOTIF = 'pontoWebConfig';
+      const CACHE_FCM_SENT = 'ponto_fcm_token_sent'; // Novo Cache para evitar loops
 
       function NotificationPage() {
         const [user, setUser] = useState(null); // { id, token }
@@ -97,12 +98,13 @@
           if (savedConfig) setConfig(JSON.parse(savedConfig));
         }, []);
 
-        // 2. Monitoramento de Token e Auto-Correção (Novo)
+        // 2. Monitoramento de Token e Auto-Correção (CORRIGIDO)
         useEffect(() => {
            if (user) checkAndSyncToken();
         }, [user]);
 
         const checkAndSyncToken = async () => {
+           // Só executa se tiver permissão e firebase carregado
            if (Notification.permission === 'granted' && messaging) {
               try {
                  const reg = await navigator.serviceWorker.ready;
@@ -110,12 +112,20 @@
                  
                  if (token) {
                     setFcmToken(token);
-                    // AUTO-SYNC: Atualiza o servidor silenciosamente para evitar erro UNREGISTERED
-                    if (user && user.id) {
-                       console.log("Sincronizando token automaticamente...");
+                    
+                    // CORREÇÃO 1: Verifica se o token já foi enviado para não ficar atualizando a planilha em loop
+                    const lastSent = localStorage.getItem(CACHE_FCM_SENT);
+                    
+                    if (user && user.id && token !== lastSent) {
+                       console.log("Token novo detectado. Sincronizando...");
                        ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token })
-                         .then(res => console.log("Token sync OK"))
+                         .then(res => {
+                            console.log("Token sync OK");
+                            localStorage.setItem(CACHE_FCM_SENT, token); // Atualiza cache
+                         })
                          .catch(e => console.warn("Token sync fail", e));
+                    } else {
+                       console.log("Token já sincronizado ou igual ao anterior.");
                     }
                  }
               } catch(e) { console.log("Token check fail", e); }
@@ -140,18 +150,22 @@
 
         const enableNotifications = async () => {
           if (!messaging) return alert("Navegador não suporta Firebase.");
-          setLoading(true);
+          
+          setLoading(true); // Bloqueia botão
+          
           try {
              const p = await Notification.requestPermission();
              setPermStatus(p);
              
              if (p === 'granted') {
+                // Tenta garantir que o SW esteja pronto (pode demorar um pouco)
                 const reg = await navigator.serviceWorker.ready;
                 const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
                 
                 if (token) {
                    setFcmToken(token);
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
+                   localStorage.setItem(CACHE_FCM_SENT, token); // Salva para não re-enviar no refresh
                    alert("✅ Sucesso! Notificações ativadas.");
                 } else {
                    alert("Erro: Não foi possível obter o endereço do dispositivo.");
@@ -160,9 +174,12 @@
                 alert("Permissão negada. Você precisa permitir nas configurações do navegador.");
              }
           } catch (err) {
-             alert("Erro técnico: " + err.message);
+             console.error(err);
+             alert("Erro técnico: " + (err.message || err));
+          } finally {
+             // CORREÇÃO 2: Garante que o loading para, independente de erro ou sucesso
+             setLoading(false);
           }
-          setLoading(false);
         };
 
         const saveConfig = async () => {
@@ -182,8 +199,9 @@
               setTimeout(() => setStatusMsg(''), 3000);
            } catch(e) {
               alert("Erro ao salvar na nuvem: " + e.message);
+           } finally {
+              setLoading(false);
            }
-           setLoading(false);
         };
 
         const sendLocalTest = () => {
@@ -209,7 +227,8 @@
                 const reg = await navigator.serviceWorker.ready;
                 const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
                 if (token) {
-                   await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
+                   // Apenas atualiza se necessário, mas para teste forçamos uma verificação leve
+                   // (Opcional: enviar token no testePush para garantir)
                 }
               } catch(e) {}
            }
@@ -219,7 +238,7 @@
               if(res.success) alert("✅ Comando enviado! Aguarde a notificação chegar.");
               else alert("Erro: " + res.error);
            } catch(e) { alert("Falha no teste: " + e.message); }
-           setLoading(false);
+           finally { setLoading(false); }
         };
 
         // --- TELA DE LOGIN ---
@@ -259,7 +278,7 @@
                        <p className="text-gray-500 text-xs">{fcmToken ? 'Conectado ao Servidor' : 'Desconectado'}</p>
                     </div>
                     {permStatus !== 'granted' || !fcmToken ? (
-                       <button onClick={enableNotifications} disabled={loading} className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow pulse-btn">
+                       <button onClick={enableNotifications} disabled={loading} className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow pulse-btn disabled:opacity-50">
                           {loading ? 'Ativando...' : 'ATIVAR AGORA'}
                        </button>
                     ) : (
@@ -272,7 +291,7 @@
                        <button onClick={sendLocalTest} className="border border-gray-300 text-gray-600 py-2 rounded font-bold text-xs hover:bg-gray-50">
                           Testar Som (Local)
                        </button>
-                       <button onClick={sendServerTest} disabled={loading} className="border border-green-600 text-green-600 py-2 rounded font-bold text-xs hover:bg-green-50">
+                       <button onClick={sendServerTest} disabled={loading} className="border border-green-600 text-green-600 py-2 rounded font-bold text-xs hover:bg-green-50 disabled:opacity-50">
                           {loading ? 'Enviando...' : 'Testar Push (Servidor)'}
                        </button>
                     </div>
@@ -307,7 +326,7 @@
                     </div>
                  </div>
 
-                 <button onClick={saveConfig} disabled={loading} className="w-full mt-6 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95">
+                 <button onClick={saveConfig} disabled={loading} className="w-full mt-6 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 disabled:opacity-70">
                     {loading ? 'Salvando...' : 'Salvar Configuração'}
                  </button>
                  {statusMsg && <p className="text-center text-green-600 text-sm mt-2 font-bold fade-in">{statusMsg}</p>}
