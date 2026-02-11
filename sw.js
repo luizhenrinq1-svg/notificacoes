@@ -48,7 +48,7 @@ messaging.onBackgroundMessage((payload) => {
     tag: tag,
     requireInteraction: true, // Exige que o usuário feche
     data: {
-      url: 'https://luizhenrinq1-svg.github.io/pontowebtestets/' 
+      url: https://luizhenrinq1-svg.github.io/testepontoweb/' 
     }
   };
 
