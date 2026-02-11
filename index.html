@@ -23,6 +23,10 @@
       .btn { transition: all 0.2s; active: scale: 0.95; }
       @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(22, 163, 74, 0); } 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); } }
       .pulse-btn { animation: pulse-green 2s infinite; }
+      
+      /* Console Visual */
+      .debug-console { font-family: monospace; font-size: 10px; background: #1e1e1e; color: #00ff00; padding: 10px; border-radius: 8px; max-height: 200px; overflow-y: auto; margin-top: 20px; border: 1px solid #333; }
+      .log-line { border-bottom: 1px solid #333; padding: 2px 0; }
     </style>
   </head>
   <body>
@@ -47,85 +51,117 @@
       try {
         firebase.initializeApp(firebaseConfig);
         messaging = firebase.messaging();
-      } catch(e) { console.error("Firebase:", e); }
+        console.log("Firebase inicializado.");
+      } catch(e) { console.error("Erro Firebase Init:", e); }
 
       const ExternalBridge = {
         request: async (action, payload = {}) => {
+          console.log(`[Bridge] Enviando ${action}...`);
           const res = await fetch(API_URL, { method: 'POST', redirect: "follow", body: JSON.stringify({ action, ...payload }) });
-          return await res.json();
+          const json = await res.json();
+          console.log(`[Bridge] Resposta ${action}:`, json);
+          return json;
         }
       };
       
-      // Registra o mesmo SW do app principal
-      if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').then(reg => console.log("SW Registrado", reg)).catch(err => console.error("SW Erro", err));
+      }
     </script>
 
     <script type="text/babel">
-      const { useState, useEffect } = React;
+      const { useState, useEffect, useRef } = React;
       const CACHE_AUTH = 'ponto_auth_data_v2';
       const CACHE_NOTIF = 'pontoWebConfig';
 
       function NotificationPage() {
-        const [user, setUser] = useState(null); // { id, token }
+        const [user, setUser] = useState(null); 
         const [loading, setLoading] = useState(false);
         const [inputLink, setInputLink] = useState('');
         const [statusMsg, setStatusMsg] = useState('');
         
-        // Status da Permissão
+        // Logs Visuais
+        const [logs, setLogs] = useState([]);
+        const addLog = (msg) => {
+           const time = new Date().toLocaleTimeString().split(' ')[0];
+           setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50));
+        };
+        
         const [permStatus, setPermStatus] = useState(Notification.permission);
         const [fcmToken, setFcmToken] = useState(null);
-        
-        // Configuração de Horário
         const [config, setConfig] = useState({ entrada: '', saida: '', antecedencia: 10 });
 
         // 1. Carregamento Inicial
         useEffect(() => {
-          // Limpeza de cache antigo que possa estar atrapalhando
-          localStorage.removeItem('ponto_fcm_token_sent');
+          addLog("--- INICIANDO APP ---");
+          localStorage.removeItem('ponto_fcm_token_sent'); // Garante limpeza
 
           const params = new URLSearchParams(window.location.search);
           const urlId = params.get('id');
           const urlToken = params.get('token');
 
           if (urlId && urlToken) {
+             addLog("Login via URL detectado");
              const auth = { id: urlId, token: urlToken };
              localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
              setUser(auth);
           } else {
              const savedAuth = localStorage.getItem(CACHE_AUTH);
-             if (savedAuth) setUser(JSON.parse(savedAuth));
+             if (savedAuth) {
+                addLog("Login via Cache detectado");
+                setUser(JSON.parse(savedAuth));
+             } else {
+                addLog("Nenhum usuário logado");
+             }
           }
 
           const savedConfig = localStorage.getItem(CACHE_NOTIF);
           if (savedConfig) setConfig(JSON.parse(savedConfig));
         }, []);
 
-        // 2. Monitoramento de Token e Sincronização Obrigatória
+        // 2. Monitoramento de Token e Sincronização
         useEffect(() => {
-           if (user) checkAndSyncToken();
+           if (user) {
+              addLog(`User setado: ${user.id}. Iniciando check de token...`);
+              checkAndSyncToken();
+           }
         }, [user]);
 
         const checkAndSyncToken = async () => {
-           // Só executa se tiver permissão e firebase carregado
-           if (Notification.permission === 'granted' && messaging) {
+           addLog(`Permissão atual: ${Notification.permission}`);
+           
+           if (!messaging) {
+              addLog("Firebase messaging não disponível.");
+              return;
+           }
+
+           if (Notification.permission === 'granted') {
               try {
+                 addLog("Buscando ServiceWorker Registration...");
                  const reg = await navigator.serviceWorker.ready;
+                 addLog("SW Ready. Pedindo Token...");
+                 
                  const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
                  
                  if (token) {
+                    addLog("Token obtido: " + token.slice(0, 10) + "...");
                     setFcmToken(token);
                     
-                    // LÓGICA ATUALIZADA: SEMPRE envia para a planilha se tiver usuário logado.
                     if (user && user.id) {
-                       console.log("Enviando token para planilha...");
+                       addLog("Enviando token para Planilha...");
                        ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token })
-                         .then(res => {
-                            console.log("Token atualizado na planilha com sucesso.");
-                         })
-                         .catch(e => console.warn("Falha ao atualizar token na planilha", e));
+                         .then(res => addLog("Planilha respondeu OK."))
+                         .catch(e => addLog("Erro Planilha: " + e.message));
                     }
+                 } else {
+                    addLog("Token veio vazio/null.");
                  }
-              } catch(e) { console.log("Erro ao obter token:", e); }
+              } catch(e) { 
+                 addLog("ERRO CRÍTICO TOKEN: " + e.message);
+                 console.error(e);
+              }
+           } else {
+              addLog("Permissão não é 'granted'. Aguardando ação do usuário.");
            }
         };
 
@@ -140,47 +176,58 @@
                    const auth = { id, token };
                    localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
                    setUser(auth);
+                   addLog("Login manual realizado.");
                 } else alert("Link incompleto.");
              } else alert("Link inválido.");
           } catch(err) { alert("Erro no link."); }
         };
 
         const enableNotifications = async () => {
+          addLog("Botão ATIVAR clicado.");
           if (!messaging) return alert("Navegador não suporta Firebase.");
           
-          setLoading(true); // Bloqueia botão
+          setLoading(true);
           
           try {
+             addLog("Solicitando permissão ao navegador...");
              const p = await Notification.requestPermission();
+             addLog(`Nova permissão: ${p}`);
              setPermStatus(p);
              
              if (p === 'granted') {
-                // Tenta garantir que o SW esteja pronto (pode demorar um pouco)
+                addLog("Aguardando SW Ready...");
                 const reg = await navigator.serviceWorker.ready;
+                addLog("Pedindo Token (get token)...");
                 const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
                 
                 if (token) {
+                   addLog("Token gerado! Sincronizando...");
                    setFcmToken(token);
-                   // Envia imediatamente e força atualização na planilha
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
-                   alert("✅ Sucesso! Notificações sincronizadas para ESTE dispositivo.");
+                   addLog("Sincronização concluída.");
+                   alert("✅ Sucesso! Notificações sincronizadas.");
                 } else {
+                   addLog("Erro: Token null.");
                    alert("Erro: Não foi possível obter o endereço do dispositivo.");
                 }
              } else {
+                addLog("Permissão negada pelo usuário.");
                 alert("Permissão negada. Você precisa permitir nas configurações do navegador.");
              }
           } catch (err) {
+             addLog("ERRO NO PROCESSO: " + err.message);
              console.error(err);
              alert("Erro técnico: " + (err.message || err));
           } finally {
              setLoading(false);
+             addLog("Loading finalizado.");
           }
         };
 
         const saveConfig = async () => {
            if(!user) return;
            setLoading(true);
+           addLog("Salvando configurações...");
            localStorage.setItem(CACHE_NOTIF, JSON.stringify(config));
            
            try {
@@ -192,8 +239,10 @@
                  antecedencia: config.antecedencia 
               });
               setStatusMsg("Configuração salva na nuvem!");
+              addLog("Config salva OK.");
               setTimeout(() => setStatusMsg(''), 3000);
            } catch(e) {
+              addLog("Erro salvar config: " + e.message);
               alert("Erro ao salvar na nuvem: " + e.message);
            } finally {
               setLoading(false);
@@ -201,6 +250,7 @@
         };
 
         const sendLocalTest = () => {
+           addLog("Teste Local solicitado.");
            if (Notification.permission !== 'granted') return alert("Ative as notificações primeiro.");
            navigator.serviceWorker.ready.then(reg => {
               reg.showNotification("Teste Local 🔔", {
@@ -216,6 +266,7 @@
         const sendServerTest = async () => {
            if(!user) return;
            setLoading(true);
+           addLog("Teste Servidor solicitado.");
            
            if (messaging) {
               try {
@@ -226,10 +277,17 @@
 
            try {
               const res = await ExternalBridge.request('testarPush', { id: user.id, token: user.token });
-              if(res.success) alert("✅ Comando enviado! Aguarde a notificação chegar.");
-              else alert("Erro: " + res.error);
-           } catch(e) { alert("Falha no teste: " + e.message); }
-           finally { setLoading(false); }
+              if(res.success) {
+                 addLog("Comando de teste enviado OK.");
+                 alert("✅ Comando enviado! Aguarde a notificação chegar.");
+              } else {
+                 addLog("Erro comando teste: " + res.error);
+                 alert("Erro: " + res.error);
+              }
+           } catch(e) { 
+              addLog("Falha teste: " + e.message);
+              alert("Falha no teste: " + e.message); 
+           } finally { setLoading(false); }
         };
 
         // --- TELA DE LOGIN ---
@@ -237,11 +295,18 @@
            <div className="flex flex-col items-center justify-center min-h-screen">
               <div className="card w-full text-center">
                  <h2 className="text-xl font-bold mb-4 text-green-800">Configuração de Alertas</h2>
-                 <p className="text-gray-600 mb-4 text-sm">Para configurar seus horários, precisamos saber quem é você. Cole seu link de ponto abaixo:</p>
+                 <p className="text-gray-600 mb-4 text-sm">Cole seu link de ponto abaixo:</p>
                  <form onSubmit={handleLogin}>
                     <input value={inputLink} onChange={e=>setInputLink(e.target.value)} className="w-full p-3 border rounded mb-4" placeholder="Cole seu link aqui..." />
                     <button className="w-full bg-green-600 text-white p-3 rounded font-bold">Identificar</button>
                  </form>
+              </div>
+              
+              {/* Console Login */}
+              <div className="w-full max-w-md px-4">
+                 <div className="debug-console">
+                    {logs.map((l, i) => <div key={i} className="log-line">{l}</div>)}
+                 </div>
               </div>
            </div>
         );
@@ -255,7 +320,7 @@
                  <p className="text-gray-500 text-sm">ID: {user.id}</p>
               </div>
 
-              {/* PASSO 1: ATIVAÇÃO (DESBLOQUEADO PARA SINCRONIZAR SEMPRE) */}
+              {/* PASSO 1: ATIVAÇÃO */}
               <div className="card">
                  <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
                     <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
@@ -266,11 +331,11 @@
                        <p className={`font-bold ${permStatus === 'granted' ? 'text-green-600' : 'text-red-500'}`}>
                           {permStatus === 'granted' ? 'Permissão Concedida' : 'Permissão Pendente'}
                        </p>
-                       <p className="text-gray-500 text-xs">{fcmToken ? 'Conectado ao Servidor' : 'Desconectado'}</p>
+                       <p className="text-gray-500 text-xs">{fcmToken ? 'Token Gerado' : 'Sem Token'}</p>
                     </div>
                     
                     <button onClick={enableNotifications} disabled={loading} className={`px-4 py-2 rounded-lg font-bold text-sm shadow disabled:opacity-50 ${permStatus === 'granted' && fcmToken ? 'bg-gray-100 text-green-700 border border-green-200 hover:bg-green-50' : 'bg-green-600 text-white pulse-btn'}`}>
-                        {loading ? 'Processando...' : (permStatus === 'granted' && fcmToken ? 'SINCRONIZAR' : 'ATIVAR AGORA')}
+                        {loading ? '...' : (permStatus === 'granted' && fcmToken ? 'SINCRONIZAR' : 'ATIVAR AGORA')}
                     </button>
                  </div>
                  
@@ -320,7 +385,16 @@
                  {statusMsg && <p className="text-center text-green-600 text-sm mt-2 font-bold fade-in">{statusMsg}</p>}
               </div>
 
-              <div className="text-center">
+              {/* DEBUG CONSOLE */}
+              <div className="text-left">
+                  <p className="text-xs text-gray-400 mb-1 ml-2">Console de Debug (Role para ver mais)</p>
+                  <div className="debug-console">
+                      {logs.map((l, i) => <div key={i} className="log-line">{l}</div>)}
+                  </div>
+                  <button onClick={() => setLogs([])} className="text-xs text-gray-400 mt-2 underline ml-2">Limpar Logs</button>
+              </div>
+
+              <div className="text-center mt-6">
                  <a href="./index.html" className="text-gray-500 text-sm font-semibold underline">Voltar para o App</a>
               </div>
 
