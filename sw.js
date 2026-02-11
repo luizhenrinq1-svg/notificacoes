@@ -57,7 +57,7 @@ messaging.onBackgroundMessage((payload) => {
 
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
-  const urlToOpen = event.notification.data?.url || 'https://luizhenrinq1-svg.github.io/pontowebtestets/';
+  const urlToOpen = event.notification.data?.url || 'https://luizhenrinq1-svg.github.io/testepontoweb/';
 
   event.waitUntil(
     clients.matchAll({type: 'window', includeUncontrolled: true}).then( windowClients => {
