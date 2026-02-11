@@ -23,8 +23,6 @@
       .btn { transition: all 0.2s; active: scale: 0.95; }
       @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(22, 163, 74, 0); } 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); } }
       .pulse-btn { animation: pulse-green 2s infinite; }
-      .fade-in { animation: fadeIn 0.4s ease-out; }
-      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
   </head>
   <body>
@@ -58,72 +56,58 @@
         }
       };
       
+      // Registra o mesmo SW do app principal
       if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
     </script>
 
     <script type="text/babel">
-      const { useState, useEffect, useRef } = React;
-
-      // CHAVES QUE DEVEM SER APAGADAS
-      const CLEANUP_KEYS = ['ponto_auth_data_v2', 'pontoWebConfig', 'ponto_fcm_token_sent'];
+      const { useState, useEffect } = React;
+      const CACHE_AUTH = 'ponto_auth_data_v2';
+      const CACHE_NOTIF = 'pontoWebConfig';
+      // REMOVIDO: const CACHE_FCM_SENT ... (Não vamos mais bloquear pelo cache)
 
       function NotificationPage() {
-        const [user, setUser] = useState(null); // { id, token } - APENAS MEMÓRIA RAM
+        const [user, setUser] = useState(null); // { id, token }
         const [loading, setLoading] = useState(false);
         const [inputLink, setInputLink] = useState('');
         const [statusMsg, setStatusMsg] = useState('');
         
+        // Status da Permissão
         const [permStatus, setPermStatus] = useState(Notification.permission);
         const [fcmToken, setFcmToken] = useState(null);
         
-        // Configuração de Horário (Inicialmente vazia)
+        // Configuração de Horário
         const [config, setConfig] = useState({ entrada: '', saida: '', antecedencia: 10 });
-        
-        // Ref para evitar loops de token na mesma sessão (sem salvar em disco)
-        const sessionTokenSent = useRef(null);
 
-        // 1. LIMPEZA TOTAL AO ABRIR (Executa uma única vez)
+        // 1. Carregamento Inicial
         useEffect(() => {
-          console.log("🧹 Limpando dados locais antigos...");
-          CLEANUP_KEYS.forEach(k => localStorage.removeItem(k));
-          
-          // Verifica se há link na URL para login automático
+          // Limpeza de cache antigo que possa estar atrapalhando
+          localStorage.removeItem('ponto_fcm_token_sent');
+
           const params = new URLSearchParams(window.location.search);
           const urlId = params.get('id');
           const urlToken = params.get('token');
 
           if (urlId && urlToken) {
              const auth = { id: urlId, token: urlToken };
-             setUser(auth); // Salva no State (RAM), não no LocalStorage
-             fetchBackendData(auth);
+             localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
+             setUser(auth);
+          } else {
+             const savedAuth = localStorage.getItem(CACHE_AUTH);
+             if (savedAuth) setUser(JSON.parse(savedAuth));
           }
+
+          const savedConfig = localStorage.getItem(CACHE_NOTIF);
+          if (savedConfig) setConfig(JSON.parse(savedConfig));
         }, []);
 
-        // 2. Sincroniza Token FCM quando user muda
+        // 2. Monitoramento de Token e Sincronização Obrigatória
         useEffect(() => {
-           if (user) syncTokenInMemory();
+           if (user) checkAndSyncToken();
         }, [user]);
 
-        // Função para buscar dados da Planilha
-        const fetchBackendData = async (auth) => {
-           setLoading(true);
-           try {
-              const data = await ExternalBridge.request('getBolsistaInfo', { id: auth.id, token: auth.token });
-              if (data.config) {
-                 setConfig({
-                    entrada: data.config.entrada || '',
-                    saida: data.config.saida || '',
-                    antecedencia: data.config.antecedencia || 10
-                 });
-              }
-           } catch (e) {
-              console.error("Erro ao baixar config:", e);
-           } finally {
-              setLoading(false);
-           }
-        };
-
-        const syncTokenInMemory = async () => {
+        const checkAndSyncToken = async () => {
+           // Só executa se tiver permissão e firebase carregado
            if (Notification.permission === 'granted' && messaging) {
               try {
                  const reg = await navigator.serviceWorker.ready;
@@ -131,101 +115,136 @@
                  
                  if (token) {
                     setFcmToken(token);
-                    // Verifica na memória RAM da sessão se já enviou
-                    if (sessionTokenSent.current !== token) {
-                       console.log("Enviando token para nuvem...");
+                    
+                    // LÓGICA ATUALIZADA: SEMPRE envia para a planilha se tiver usuário logado.
+                    // Não confia em cache local para decidir se envia ou não.
+                    if (user && user.id) {
+                       console.log("Enviando token para planilha...");
                        ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token })
-                         .then(() => {
-                            console.log("Token OK");
-                            sessionTokenSent.current = token; // Marca como enviado nesta sessão
-                         });
+                         .then(res => {
+                            console.log("Token atualizado na planilha com sucesso.");
+                         })
+                         .catch(e => console.warn("Falha ao atualizar token na planilha", e));
                     }
                  }
-              } catch(e) { console.log("Token fail", e); }
+              } catch(e) { console.log("Erro ao obter token:", e); }
            }
         };
 
         const handleLogin = (e) => {
           e.preventDefault();
           try {
-             let id, token;
              if(inputLink.includes('?')) {
                 const u = new URL(inputLink.startsWith('http') ? inputLink : `http://d.com/${inputLink}`);
                 const p = new URLSearchParams(u.search);
-                id = p.get('id'); 
-                token = p.get('token');
-             } else {
-                // Tenta aceitar ID direto se o usuário digitar só ID (opcional, aqui foca no link)
-                alert("Por favor, cole o link completo.");
-                return;
-             }
-
-             if(id && token) {
-                const auth = { id, token };
-                setUser(auth);
-                fetchBackendData(auth);
-             } else alert("Link incompleto.");
-          } catch(err) { alert("Link inválido."); }
+                const id = p.get('id'), token = p.get('token');
+                if(id && token) {
+                   const auth = { id, token };
+                   localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
+                   setUser(auth);
+                } else alert("Link incompleto.");
+             } else alert("Link inválido.");
+          } catch(err) { alert("Erro no link."); }
         };
 
         const enableNotifications = async () => {
           if (!messaging) return alert("Navegador não suporta Firebase.");
-          setLoading(true);
+          
+          setLoading(true); // Bloqueia botão
+          
           try {
              const p = await Notification.requestPermission();
              setPermStatus(p);
+             
              if (p === 'granted') {
+                // Tenta garantir que o SW esteja pronto (pode demorar um pouco)
                 const reg = await navigator.serviceWorker.ready;
                 const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+                
                 if (token) {
                    setFcmToken(token);
+                   // Envia imediatamente e força atualização na planilha
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
-                   sessionTokenSent.current = token;
-                   alert("✅ Sucesso! Notificações ativadas.");
-                } else alert("Erro ao obter token.");
-             } else alert("Permissão negada.");
-          } catch (err) { alert("Erro técnico: " + err); } 
-          finally { setLoading(false); }
+                   alert("✅ Sucesso! Notificações ativadas e sincronizadas.");
+                } else {
+                   alert("Erro: Não foi possível obter o endereço do dispositivo.");
+                }
+             } else {
+                alert("Permissão negada. Você precisa permitir nas configurações do navegador.");
+             }
+          } catch (err) {
+             console.error(err);
+             alert("Erro técnico: " + (err.message || err));
+          } finally {
+             setLoading(false);
+          }
         };
 
         const saveConfig = async () => {
            if(!user) return;
            setLoading(true);
-           // NÃO SALVA NO LOCALSTORAGE
+           localStorage.setItem(CACHE_NOTIF, JSON.stringify(config));
+           
            try {
               await ExternalBridge.request('salvarConfiguracao', { 
-                 id: user.id, token: user.token, 
-                 entrada: config.entrada, saida: config.saida, antecedencia: config.antecedencia 
+                 id: user.id, 
+                 token: user.token, 
+                 entrada: config.entrada, 
+                 saida: config.saida, 
+                 antecedencia: config.antecedencia 
               });
-              setStatusMsg("Salvo na nuvem!");
+              setStatusMsg("Configuração salva na nuvem!");
               setTimeout(() => setStatusMsg(''), 3000);
-           } catch(e) { alert("Erro ao salvar: " + e.message); } 
-           finally { setLoading(false); }
+           } catch(e) {
+              alert("Erro ao salvar na nuvem: " + e.message);
+           } finally {
+              setLoading(false);
+           }
+        };
+
+        const sendLocalTest = () => {
+           if (Notification.permission !== 'granted') return alert("Ative as notificações primeiro.");
+           navigator.serviceWorker.ready.then(reg => {
+              reg.showNotification("Teste Local 🔔", {
+                 body: "Som e vibração funcionando!",
+                 icon: "https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true",
+                 vibrate: [500, 200, 500, 200, 500],
+                 tag: 'test-notification',
+                 renotify: true
+              });
+           });
         };
 
         const sendServerTest = async () => {
            if(!user) return;
            setLoading(true);
+           
+           // Força refresh do token antes de enviar o teste
+           if (messaging) {
+              try {
+                const reg = await navigator.serviceWorker.ready;
+                const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+                // Opcional: reenviar token aqui se necessário
+              } catch(e) {}
+           }
+
            try {
               const res = await ExternalBridge.request('testarPush', { id: user.id, token: user.token });
-              if(res.success) alert("✅ Comando enviado! Aguarde.");
+              if(res.success) alert("✅ Comando enviado! Aguarde a notificação chegar.");
               else alert("Erro: " + res.error);
-           } catch(e) { alert("Falha: " + e.message); }
+           } catch(e) { alert("Falha no teste: " + e.message); }
            finally { setLoading(false); }
         };
 
-        // --- TELA DE LOGIN (SEMPRE APARECE SE NÃO TIVER LINK NA URL) ---
+        // --- TELA DE LOGIN ---
         if (!user) return (
-           <div className="flex flex-col items-center justify-center min-h-screen fade-in">
-              <div className="card w-full text-center max-w-sm">
-                 <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 text-green-600">
-                    <img src="https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true" className="w-10 h-10" />
-                 </div>
-                 <h2 className="text-xl font-bold mb-2 text-green-800">Acesso Seguro</h2>
-                 <p className="text-gray-500 mb-6 text-xs">Nenhum dado é salvo neste dispositivo.<br/>Cole seu link de ponto para acessar.</p>
+           <div className="flex flex-col items-center justify-center min-h-screen">
+              <div className="card w-full text-center">
+                 <h2 className="text-xl font-bold mb-4 text-green-800">Configuração de Alertas</h2>
+                 <p className="text-gray-600 mb-4 text-sm">Para configurar seus horários, precisamos saber quem é você. Cole seu link de ponto abaixo:</p>
                  <form onSubmit={handleLogin}>
-                    <input value={inputLink} onChange={e=>setInputLink(e.target.value)} className="w-full p-3 border rounded-xl mb-4 text-center text-sm" placeholder="Cole seu link aqui..." />
-                    <button className="w-full bg-green-600 text-white p-3 rounded-xl font-bold shadow-lg active:scale-95 transition-transform">Entrar</button>
+                    <input value={inputLink} onChange={e=>setInputLink(e.target.value)} className="w-full p-3 border rounded mb-4" placeholder="Cole seu link aqui..." />
+                    <button className="w-full bg-green-600 text-white p-3 rounded font-bold">Identificar</button>
                  </form>
               </div>
            </div>
@@ -233,43 +252,52 @@
 
         // --- TELA PRINCIPAL ---
         return (
-           <div className="pb-10 fade-in">
+           <div className="pb-10">
               <div className="text-center mb-6 mt-4">
                  <img src="https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true" className="w-16 h-16 mx-auto mb-2" />
-                 <h1 className="text-2xl font-bold text-gray-800">Configuração Nuvem</h1>
-                 <p className="text-gray-500 text-xs">Sessão Temporária • ID: {user.id}</p>
+                 <h1 className="text-2xl font-bold text-gray-800">Central de Notificações</h1>
+                 <p className="text-gray-500 text-sm">ID: {user.id}</p>
               </div>
 
-              {/* PASSO 1 */}
+              {/* PASSO 1: ATIVAÇÃO */}
               <div className="card">
                  <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
                     <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
-                    Conexão
+                    Permissão do Navegador
                  </h3>
                  <div className="flex items-center justify-between mt-4">
                     <div className="text-sm">
                        <p className={`font-bold ${permStatus === 'granted' ? 'text-green-600' : 'text-red-500'}`}>
-                          {permStatus === 'granted' ? 'Ativo no Navegador' : 'Inativo'}
+                          {permStatus === 'granted' ? 'Permissão Concedida' : 'Permissão Pendente'}
                        </p>
-                       <p className="text-gray-500 text-xs">{fcmToken ? 'Sincronizado' : 'Aguardando...'}</p>
+                       <p className="text-gray-500 text-xs">{fcmToken ? 'Conectado ao Servidor' : 'Desconectado'}</p>
                     </div>
                     {permStatus !== 'granted' || !fcmToken ? (
                        <button onClick={enableNotifications} disabled={loading} className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow pulse-btn disabled:opacity-50">
-                          {loading ? '...' : 'CONECTAR'}
+                          {loading ? 'Ativando...' : 'ATIVAR AGORA'}
                        </button>
                     ) : (
-                       <button onClick={sendServerTest} disabled={loading} className="border border-green-600 text-green-600 px-4 py-2 rounded-lg font-bold text-xs hover:bg-green-50 disabled:opacity-50">
-                          TESTAR PUSH
-                       </button>
+                       <span className="text-2xl">✅</span>
                     )}
                  </div>
+                 
+                 {permStatus === 'granted' && (
+                    <div className="grid grid-cols-2 gap-2 mt-4">
+                       <button onClick={sendLocalTest} className="border border-gray-300 text-gray-600 py-2 rounded font-bold text-xs hover:bg-gray-50">
+                          Testar Som (Local)
+                       </button>
+                       <button onClick={sendServerTest} disabled={loading} className="border border-green-600 text-green-600 py-2 rounded font-bold text-xs hover:bg-green-50 disabled:opacity-50">
+                          {loading ? 'Enviando...' : 'Testar Push (Servidor)'}
+                       </button>
+                    </div>
+                 )}
               </div>
 
-              {/* PASSO 2 */}
+              {/* PASSO 2: HORÁRIOS */}
               <div className="card">
                  <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                     <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
-                    Horários (Planilha)
+                    Meus Horários
                  </h3>
                  
                  <div className="space-y-4">
@@ -282,24 +310,25 @@
                        <input type="time" value={config.saida} onChange={e => setConfig({...config, saida: e.target.value})} className="w-full p-3 border rounded-xl bg-gray-50 font-bold text-lg text-center" />
                     </div>
                     <div>
-                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Avisar Antes</label>
-                       <select value={config.antecedencia} onChange={e => setConfig({...config, antecedencia: e.target.value})} className="w-full p-3 border rounded-xl bg-gray-50 text-center">
-                          <option value="1">1 min</option>
-                          <option value="5">5 min</option>
-                          <option value="10">10 min</option>
-                          <option value="15">15 min</option>
+                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Avisar Antes (Minutos)</label>
+                       <select value={config.antecedencia} onChange={e => setConfig({...config, antecedencia: e.target.value})} className="w-full p-3 border rounded-xl bg-gray-50">
+                          <option value="1">1 minuto antes</option>
+                          <option value="5">5 minutos antes</option>
+                          <option value="10">10 minutos antes</option>
+                          <option value="15">15 minutos antes</option>
+                          <option value="30">30 minutos antes</option>
                        </select>
                     </div>
                  </div>
 
                  <button onClick={saveConfig} disabled={loading} className="w-full mt-6 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 disabled:opacity-70">
-                    {loading ? 'Sincronizando...' : 'Salvar na Nuvem'}
+                    {loading ? 'Salvando...' : 'Salvar Configuração'}
                  </button>
                  {statusMsg && <p className="text-center text-green-600 text-sm mt-2 font-bold fade-in">{statusMsg}</p>}
               </div>
-              
-              <div className="text-center mt-8">
-                  <button onClick={() => window.location.reload()} className="text-gray-400 text-xs underline">Sair e Limpar Sessão</button>
+
+              <div className="text-center">
+                 <a href="./index.html" className="text-gray-500 text-sm font-semibold underline">Voltar para o App</a>
               </div>
 
            </div>
