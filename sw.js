@@ -1,10 +1,13 @@
 /**
- * Service Worker para PAGINA DE NOTIFICAÇÕES
- * Versão: Suporte a Alerta Crítico (Vibração Intensa)
+ * Service Worker App 2 - Notificações
+ * Correção: Imports do Firebase e Forçar Ativação (SkipWaiting)
  */
+
+// 1. Imports Obrigatórios do Firebase (Mesma versão do Index.html)
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
 
+// 2. Configuração (Tem que ser igual à do Index.html)
 const firebaseConfig = {
   apiKey: "AIzaSyCn89LRlH1lksZ811--jb2jlB2iZS5NH1s",
   authDomain: "pontoweb-dc8dd.firebaseapp.com",
@@ -14,65 +17,54 @@ const firebaseConfig = {
   appId: "1:465750633035:web:282efd14b807e2a3823bce"
 };
 
-firebase.initializeApp(firebaseConfig);
-const messaging = firebase.messaging();
+// 3. Inicializa Firebase no Background
+try {
+  firebase.initializeApp(firebaseConfig);
+  const messaging = firebase.messaging();
+  console.log('[SW] Firebase inicializado com sucesso.');
 
-messaging.onBackgroundMessage((payload) => {
-  console.log('[SW] Push Recebido:', payload);
-  
-  const title = payload.data?.title || "PontoWeb";
-  const body = payload.data?.body || "Atenção ao horário!";
-  const type = payload.data?.type || "normal"; // 'normal' ou 'critical'
+  // Handler de mensagens em segundo plano
+  messaging.onBackgroundMessage((payload) => {
+    console.log('[SW] Mensagem recebida no background:', payload);
+    
+    const notificationTitle = payload.data.title || payload.notification?.title || 'Nova Notificação';
+    const notificationOptions = {
+      body: payload.data.body || payload.notification?.body || '',
+      icon: 'https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true',
+      vibrate: [200, 100, 200],
+      data: payload.data
+    };
 
-  // Configuração padrão
-  let vibratePattern = [500, 200, 500];
-  let tag = 'ponto-alert';
+    return self.registration.showNotification(notificationTitle, notificationOptions);
+  });
+} catch (e) {
+  console.error('[SW] Erro ao inicializar Firebase:', e);
+}
 
-  // Se for CRÍTICO (15 min atrasado), vibração intensa e longa
-  if (type === 'critical') {
-     // Vibra 2s, para 1s, repete varias vezes (simulando "continuo")
-     vibratePattern = [
-       2000, 1000, 2000, 1000, 2000, 1000, 
-       2000, 1000, 2000, 1000, 2000, 1000,
-       2000, 1000, 2000, 1000, 2000, 1000
-     ];
-     tag = 'ponto-critical';
-  }
-
-  const notificationOptions = {
-    body: body,
-    icon: 'https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true',
-    badge: 'https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true',
-    vibrate: vibratePattern,
-    renotify: true, // Garante que toca mesmo se ja tiver notificação
-    tag: tag,
-    requireInteraction: true, // Exige que o usuário feche
-    data: {
-      url: https://luizhenrinq1-svg.github.io/testepontoweb/' 
-    }
-  };
-
-  return self.registration.showNotification(title, notificationOptions);
+// 4. Instalação e Ativação Imediata (Resolve o problema do "Aguardando SW Ready")
+self.addEventListener('install', (event) => {
+  console.log('[SW] Instalado.');
+  // Força o SW a assumir o controle imediatamente, sem esperar fechar a aba
+  self.skipWaiting();
 });
 
-self.addEventListener('notificationclick', function(event) {
-  event.notification.close();
-  const urlToOpen = event.notification.data?.url || 'https://luizhenrinq1-svg.github.io/testepontoweb/';
+self.addEventListener('activate', (event) => {
+  console.log('[SW] Ativado.');
+  // Reivindica o controle de todas as abas abertas imediatamente
+  event.waitUntil(clients.claim());
+});
 
+// 5. Clique na Notificação
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  // Tenta focar na aba aberta ou abrir o app
   event.waitUntil(
-    clients.matchAll({type: 'window', includeUncontrolled: true}).then( windowClients => {
+    clients.matchAll({type: 'window'}).then( windowClients => {
       for (var i = 0; i < windowClients.length; i++) {
         var client = windowClients[i];
-        if (client.url.includes("pontowebtestets") && 'focus' in client) {
-          return client.focus();
-        }
+        if (client.url && 'focus' in client) return client.focus();
       }
-      if (clients.openWindow) {
-        return clients.openWindow(urlToOpen);
-      }
+      if (clients.openWindow) return clients.openWindow('./index.html');
     })
   );
 });
-
-self.addEventListener('install', (event) => self.skipWaiting());
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
