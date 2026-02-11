@@ -64,7 +64,6 @@
       const { useState, useEffect } = React;
       const CACHE_AUTH = 'ponto_auth_data_v2';
       const CACHE_NOTIF = 'pontoWebConfig';
-      // REMOVIDO: const CACHE_FCM_SENT ... (Não vamos mais bloquear pelo cache)
 
       function NotificationPage() {
         const [user, setUser] = useState(null); // { id, token }
@@ -117,7 +116,6 @@
                     setFcmToken(token);
                     
                     // LÓGICA ATUALIZADA: SEMPRE envia para a planilha se tiver usuário logado.
-                    // Não confia em cache local para decidir se envia ou não.
                     if (user && user.id) {
                        console.log("Enviando token para planilha...");
                        ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token })
@@ -165,7 +163,7 @@
                    setFcmToken(token);
                    // Envia imediatamente e força atualização na planilha
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
-                   alert("✅ Sucesso! Notificações ativadas e sincronizadas.");
+                   alert("✅ Sucesso! Notificações sincronizadas para ESTE dispositivo.");
                 } else {
                    alert("Erro: Não foi possível obter o endereço do dispositivo.");
                 }
@@ -219,12 +217,10 @@
            if(!user) return;
            setLoading(true);
            
-           // Força refresh do token antes de enviar o teste
            if (messaging) {
               try {
                 const reg = await navigator.serviceWorker.ready;
-                const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
-                // Opcional: reenviar token aqui se necessário
+                await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
               } catch(e) {}
            }
 
@@ -259,7 +255,7 @@
                  <p className="text-gray-500 text-sm">ID: {user.id}</p>
               </div>
 
-              {/* PASSO 1: ATIVAÇÃO */}
+              {/* PASSO 1: ATIVAÇÃO (DESBLOQUEADO PARA SINCRONIZAR SEMPRE) */}
               <div className="card">
                  <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
                     <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
@@ -272,13 +268,10 @@
                        </p>
                        <p className="text-gray-500 text-xs">{fcmToken ? 'Conectado ao Servidor' : 'Desconectado'}</p>
                     </div>
-                    {permStatus !== 'granted' || !fcmToken ? (
-                       <button onClick={enableNotifications} disabled={loading} className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow pulse-btn disabled:opacity-50">
-                          {loading ? 'Ativando...' : 'ATIVAR AGORA'}
-                       </button>
-                    ) : (
-                       <span className="text-2xl">✅</span>
-                    )}
+                    
+                    <button onClick={enableNotifications} disabled={loading} className={`px-4 py-2 rounded-lg font-bold text-sm shadow disabled:opacity-50 ${permStatus === 'granted' && fcmToken ? 'bg-gray-100 text-green-700 border border-green-200 hover:bg-green-50' : 'bg-green-600 text-white pulse-btn'}`}>
+                        {loading ? 'Processando...' : (permStatus === 'granted' && fcmToken ? 'SINCRONIZAR' : 'ATIVAR AGORA')}
+                    </button>
                  </div>
                  
                  {permStatus === 'granted' && (
