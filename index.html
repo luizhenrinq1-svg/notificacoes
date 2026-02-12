@@ -76,13 +76,29 @@
       const CACHE_AUTH = 'ponto_auth_data_v2';
       const CACHE_NOTIF = 'pontoWebConfig';
 
-      // --- COMPONENTE ÍCONE ---
-      const Icon = ({ name, size = 24, className }) => {
+      // --- COMPONENTE ÍCONE (CORRIGIDO) ---
+      const Icon = ({ name, size = 24, className = "" }) => {
         const ref = useRef(null);
+        
         useEffect(() => {
-          if (ref.current) lucide.createIcons({ root: ref.current, nameAttr: 'data-lucide', attrs: {class: className} });
-        }, [name, className]);
-        return <i ref={ref} data-lucide={name} width={size} height={size}></i>;
+          if (ref.current) {
+            // Cria o ícone no elemento referenciado
+            lucide.createIcons({
+              root: ref.current,
+              nameAttr: 'data-lucide',
+              attrs: { class: className }
+            });
+          }
+        }, [name, size, className]);
+
+        // Usa span e dangerouslySetInnerHTML para evitar que o React reclame da remoção do <i> pelo Lucide
+        return (
+          <span 
+            ref={ref} 
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            dangerouslySetInnerHTML={{ __html: `<i data-lucide="${name}" width="${size}" height="${size}"></i>` }}
+          />
+        );
       };
 
       // --- COMPONENTE MODAL ANIMADO ---
@@ -91,20 +107,20 @@
 
         const colors = {
           success: { bg: 'bg-green-100', text: 'text-green-600', icon: 'check-circle' },
-          error: { bg: 'bg-red-100', text: 'text-red-600', icon: 'alert-triangle' },
+          error: { bg: 'bg-red-100', text: 'text-red-600', icon: 'triangle-alert' }, // Nome corrigido para Lucide
           info: { bg: 'bg-blue-100', text: 'text-blue-600', icon: 'info' }
         };
         const theme = colors[type] || colors.info;
 
         return (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 fade-in">
-            <div className="bg-white rounded-3xl p-8 shadow-2xl w-full max-w-sm text-center scale-up relative">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4 fade-in">
+            <div className="bg-white rounded-3xl p-8 shadow-2xl w-full max-w-sm text-center scale-up relative border border-gray-100">
               <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${theme.bg} ${theme.text}`}>
                 <Icon name={theme.icon} size={40} />
               </div>
               <h3 className="text-2xl font-bold text-gray-800 mb-2">{title}</h3>
-              <p className="text-gray-500 mb-8 leading-relaxed">{message}</p>
-              <button onClick={onClose} className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold text-lg hover:scale-[1.02] active:scale-95 transition-all shadow-lg">
+              <p className="text-gray-500 mb-8 leading-relaxed text-sm font-medium">{message}</p>
+              <button onClick={onClose} className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold text-lg hover:scale-[1.02] active:scale-95 transition-all shadow-xl hover:shadow-2xl">
                 Entendi
               </button>
             </div>
