@@ -12,6 +12,9 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Ícones Lucide -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 
     <!-- Firebase -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -19,17 +22,22 @@
 
     <style>
       body { background-color: #f3f4f6; color: #1f2937; font-family: 'Segoe UI', sans-serif; }
-      .card { background: white; border-radius: 16px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); margin-bottom: 16px; }
+      .card { background: white; border-radius: 24px; padding: 24px; box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05); margin-bottom: 16px; border: 1px solid #f0f0f0; }
       .btn { transition: all 0.2s; active: scale: 0.95; }
       @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(22, 163, 74, 0); } 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); } }
       .pulse-btn { animation: pulse-green 2s infinite; }
-      .fade-in { animation: fadeIn 0.4s ease-out; }
-      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      
+      /* Animações do Modal */
+      .fade-in { animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      
+      .scale-up { animation: scaleUp 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+      @keyframes scaleUp { from { transform: scale(0.9) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
     </style>
   </head>
   <body>
 
-    <div id="root" class="max-w-md mx-auto min-h-screen p-4"></div>
+    <div id="root" class="max-w-md mx-auto min-h-screen p-4 flex flex-col justify-center"></div>
 
     <!-- CONFIGURAÇÃO E SHIM -->
     <script>
@@ -68,19 +76,61 @@
       const CACHE_AUTH = 'ponto_auth_data_v2';
       const CACHE_NOTIF = 'pontoWebConfig';
 
+      // --- COMPONENTE ÍCONE ---
+      const Icon = ({ name, size = 24, className }) => {
+        const ref = useRef(null);
+        useEffect(() => {
+          if (ref.current) lucide.createIcons({ root: ref.current, nameAttr: 'data-lucide', attrs: {class: className} });
+        }, [name, className]);
+        return <i ref={ref} data-lucide={name} width={size} height={size}></i>;
+      };
+
+      // --- COMPONENTE MODAL ANIMADO ---
+      const Modal = ({ isOpen, type, title, message, onClose }) => {
+        if (!isOpen) return null;
+
+        const colors = {
+          success: { bg: 'bg-green-100', text: 'text-green-600', icon: 'check-circle' },
+          error: { bg: 'bg-red-100', text: 'text-red-600', icon: 'alert-triangle' },
+          info: { bg: 'bg-blue-100', text: 'text-blue-600', icon: 'info' }
+        };
+        const theme = colors[type] || colors.info;
+
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 fade-in">
+            <div className="bg-white rounded-3xl p-8 shadow-2xl w-full max-w-sm text-center scale-up relative">
+              <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${theme.bg} ${theme.text}`}>
+                <Icon name={theme.icon} size={40} />
+              </div>
+              <h3 className="text-2xl font-bold text-gray-800 mb-2">{title}</h3>
+              <p className="text-gray-500 mb-8 leading-relaxed">{message}</p>
+              <button onClick={onClose} className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold text-lg hover:scale-[1.02] active:scale-95 transition-all shadow-lg">
+                Entendi
+              </button>
+            </div>
+          </div>
+        );
+      };
+
       function NotificationPage() {
         const [user, setUser] = useState(null); 
         const [loading, setLoading] = useState(false);
         const [inputLink, setInputLink] = useState('');
-        const [statusMsg, setStatusMsg] = useState('');
         
         const [permStatus, setPermStatus] = useState(Notification.permission);
         const [fcmToken, setFcmToken] = useState(null);
         const [config, setConfig] = useState({ entrada: '', saida: '', antecedencia: 10 });
 
+        // Estado do Modal
+        const [modal, setModal] = useState({ isOpen: false, title: '', message: '', type: 'info' });
+
+        const showAlert = (title, message, type = 'info') => {
+          setModal({ isOpen: true, title, message, type });
+        };
+
         // 1. Carregamento Inicial
         useEffect(() => {
-          localStorage.removeItem('ponto_fcm_token_sent'); // Garante limpeza
+          localStorage.removeItem('ponto_fcm_token_sent'); 
 
           const params = new URLSearchParams(window.location.search);
           const urlId = params.get('id');
@@ -101,32 +151,25 @@
           if (savedConfig) setConfig(JSON.parse(savedConfig));
         }, []);
 
-        // 2. Monitoramento de Token e Sincronização
+        // 2. Monitoramento de Token
         useEffect(() => {
-           if (user) {
-              checkAndSyncToken();
-           }
+           if (user) checkAndSyncToken();
         }, [user]);
 
         const checkAndSyncToken = async () => {
            if (!messaging) return;
-
            if (Notification.permission === 'granted') {
               try {
                  const reg = await navigator.serviceWorker.ready;
                  const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
-                 
                  if (token) {
                     setFcmToken(token);
-                    
                     if (user && user.id) {
                        ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token })
                          .catch(e => console.warn("Erro silencioso ao salvar token:", e));
                     }
                  }
-              } catch(e) { 
-                 console.error("Erro check token:", e);
-              }
+              } catch(e) { console.error("Erro check token:", e); }
            }
         };
 
@@ -141,16 +184,15 @@
                    const auth = { id, token };
                    localStorage.setItem(CACHE_AUTH, JSON.stringify(auth));
                    setUser(auth);
-                } else alert("Link incompleto.");
-             } else alert("Link inválido.");
-          } catch(err) { alert("Erro no link."); }
+                } else showAlert("Erro", "Link incompleto. Verifique se copiou tudo.", "error");
+             } else showAlert("Erro", "Link inválido.", "error");
+          } catch(err) { showAlert("Erro", "Formato de link incorreto.", "error"); }
         };
 
         const enableNotifications = async () => {
-          if (!messaging) return alert("Navegador não suporta Firebase.");
+          if (!messaging) return showAlert("Erro", "Este navegador não suporta notificações.", "error");
           
           setLoading(true);
-          
           try {
              const p = await Notification.requestPermission();
              setPermStatus(p);
@@ -162,16 +204,15 @@
                 if (token) {
                    setFcmToken(token);
                    await ExternalBridge.request('salvarToken', { id: user.id, token: user.token, fcmToken: token });
-                   alert("✅ Sucesso! Notificações sincronizadas.");
+                   showAlert("Sucesso!", "Seu dispositivo foi conectado e receberá alertas.", "success");
                 } else {
-                   alert("Erro: Não foi possível obter o endereço do dispositivo.");
+                   showAlert("Aviso", "Permissão concedida, mas houve erro ao gerar o identificador.", "error");
                 }
              } else {
-                alert("Permissão negada. Você precisa permitir nas configurações do navegador.");
+                showAlert("Permissão Negada", "Você precisa permitir notificações nas configurações do navegador para usar este recurso.", "error");
              }
           } catch (err) {
-             console.error(err);
-             alert("Erro técnico: " + (err.message || err));
+             showAlert("Erro Técnico", err.message || err, "error");
           } finally {
              setLoading(false);
           }
@@ -190,17 +231,16 @@
                  saida: config.saida, 
                  antecedencia: config.antecedencia 
               });
-              setStatusMsg("Configuração salva na nuvem!");
-              setTimeout(() => setStatusMsg(''), 3000);
+              showAlert("Configuração Salva", "Seus horários foram atualizados na nuvem!", "success");
            } catch(e) {
-              alert("Erro ao salvar na nuvem: " + e.message);
+              showAlert("Erro", "Não foi possível salvar na nuvem: " + e.message, "error");
            } finally {
               setLoading(false);
            }
         };
 
         const sendLocalTest = () => {
-           if (Notification.permission !== 'granted') return alert("Ative as notificações primeiro.");
+           if (Notification.permission !== 'granted') return showAlert("Atenção", "Ative as notificações antes de testar.", "info");
            navigator.serviceWorker.ready.then(reg => {
               reg.showNotification("Teste Local 🔔", {
                  body: "Som e vibração funcionando!",
@@ -226,24 +266,28 @@
            try {
               const res = await ExternalBridge.request('testarPush', { id: user.id, token: user.token });
               if(res.success) {
-                 alert("✅ Comando enviado! Aguarde a notificação chegar.");
+                 showAlert("Teste Enviado", "O servidor enviou o comando. Aguarde a notificação chegar em instantes.", "success");
               } else {
-                 alert("Erro: " + res.error);
+                 showAlert("Erro no Servidor", res.error, "error");
               }
            } catch(e) { 
-              alert("Falha no teste: " + e.message); 
+              showAlert("Falha no Teste", e.message, "error"); 
            } finally { setLoading(false); }
         };
 
         // --- TELA DE LOGIN ---
         if (!user) return (
            <div className="flex flex-col items-center justify-center min-h-screen fade-in">
-              <div className="card w-full text-center">
-                 <h2 className="text-xl font-bold mb-4 text-green-800">Configuração de Alertas</h2>
-                 <p className="text-gray-600 mb-4 text-sm">Cole seu link de ponto abaixo:</p>
+              <Modal isOpen={modal.isOpen} type={modal.type} title={modal.title} message={modal.message} onClose={() => setModal({...modal, isOpen: false})} />
+              <div className="card w-full text-center max-w-sm">
+                 <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4 text-green-600">
+                    <Icon name="link" size={32} />
+                 </div>
+                 <h2 className="text-xl font-bold mb-2 text-gray-800">Identificação</h2>
+                 <p className="text-gray-500 mb-6 text-sm">Cole seu link de ponto para acessar a configuração.</p>
                  <form onSubmit={handleLogin}>
-                    <input value={inputLink} onChange={e=>setInputLink(e.target.value)} className="w-full p-3 border rounded mb-4" placeholder="Cole seu link aqui..." />
-                    <button className="w-full bg-green-600 text-white p-3 rounded font-bold">Identificar</button>
+                    <input value={inputLink} onChange={e=>setInputLink(e.target.value)} className="w-full p-4 border border-gray-200 rounded-xl mb-4 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-green-500 outline-none transition-all text-center font-medium" placeholder="Cole o link aqui..." />
+                    <button className="w-full bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 transition-colors shadow-lg shadow-green-200">Entrar</button>
                  </form>
               </div>
            </div>
@@ -251,39 +295,46 @@
 
         // --- TELA PRINCIPAL ---
         return (
-           <div className="pb-10 fade-in">
-              <div className="text-center mb-6 mt-4">
-                 <img src="https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true" className="w-16 h-16 mx-auto mb-2" />
-                 <h1 className="text-2xl font-bold text-gray-800">Central de Notificações</h1>
-                 <p className="text-gray-500 text-sm">ID: {user.id}</p>
+           <div className="pb-10 fade-in w-full">
+              <Modal isOpen={modal.isOpen} type={modal.type} title={modal.title} message={modal.message} onClose={() => setModal({...modal, isOpen: false})} />
+              
+              <div className="text-center mb-8 mt-4">
+                 <div className="relative inline-block">
+                    <img src="https://github.com/luizhenrinq1-svg/testepontoweb/blob/main/Icone.png?raw=true" className="w-20 h-20 mx-auto mb-3 drop-shadow-md rounded-2xl" />
+                    <div className="absolute -bottom-1 -right-1 bg-green-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full border-2 border-white">BETA</div>
+                 </div>
+                 <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Meus Alertas</h1>
+                 <p className="text-gray-400 text-xs uppercase tracking-widest font-semibold mt-1">Configuração Pessoal</p>
               </div>
 
               {/* PASSO 1: ATIVAÇÃO */}
               <div className="card">
-                 <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
-                    <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
-                    Permissão do Navegador
-                 </h3>
-                 <div className="flex items-center justify-between mt-4">
-                    <div className="text-sm">
-                       <p className={`font-bold ${permStatus === 'granted' ? 'text-green-600' : 'text-red-500'}`}>
-                          {permStatus === 'granted' ? 'Permissão Concedida' : 'Permissão Pendente'}
-                       </p>
-                       <p className="text-gray-500 text-xs">{fcmToken ? 'Token Gerado' : 'Sem Token'}</p>
-                    </div>
-                    
-                    <button onClick={enableNotifications} disabled={loading} className={`px-4 py-2 rounded-lg font-bold text-sm shadow disabled:opacity-50 ${permStatus === 'granted' && fcmToken ? 'bg-gray-100 text-green-700 border border-green-200 hover:bg-green-50' : 'bg-green-600 text-white pulse-btn'}`}>
-                        {loading ? '...' : (permStatus === 'granted' && fcmToken ? 'SINCRONIZAR' : 'ATIVAR AGORA')}
-                    </button>
+                 <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-500">1</div>
+                    <h3 className="font-bold text-lg text-gray-800">Conexão</h3>
                  </div>
                  
+                 <div className="bg-gray-50 rounded-xl p-4 mb-4 border border-gray-100">
+                    <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                           <div className={`w-3 h-3 rounded-full ${permStatus === 'granted' && fcmToken ? 'bg-green-500 animate-pulse' : 'bg-red-400'}`}></div>
+                           <span className="text-sm font-semibold text-gray-600">{permStatus === 'granted' ? 'Ativo' : 'Inativo'}</span>
+                        </div>
+                        <span className="text-[10px] text-gray-400 bg-white px-2 py-1 rounded border border-gray-200 font-mono">{user.id}</span>
+                    </div>
+                 </div>
+                 
+                 <button onClick={enableNotifications} disabled={loading || (permStatus === 'granted' && fcmToken)} className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${permStatus === 'granted' && fcmToken ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-green-600 text-white shadow-lg hover:bg-green-700 active:scale-95'}`}>
+                    {loading ? 'Processando...' : (permStatus === 'granted' && fcmToken ? <><Icon name="check" size={18}/> Sincronizado</> : 'ATIVAR NOTIFICAÇÕES')}
+                 </button>
+                 
                  {permStatus === 'granted' && (
-                    <div className="grid grid-cols-2 gap-2 mt-4">
-                       <button onClick={sendLocalTest} className="border border-gray-300 text-gray-600 py-2 rounded font-bold text-xs hover:bg-gray-50">
-                          Testar Som (Local)
+                    <div className="grid grid-cols-2 gap-3 mt-4">
+                       <button onClick={sendLocalTest} className="bg-white border border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-xs hover:bg-gray-50 transition-colors flex flex-col items-center gap-1">
+                          <Icon name="volume-2" size={16}/> Teste Som
                        </button>
-                       <button onClick={sendServerTest} disabled={loading} className="border border-green-600 text-green-600 py-2 rounded font-bold text-xs hover:bg-green-50 disabled:opacity-50">
-                          {loading ? 'Enviando...' : 'Testar Push (Servidor)'}
+                       <button onClick={sendServerTest} disabled={loading} className="bg-white border border-gray-200 text-blue-600 py-3 rounded-xl font-bold text-xs hover:bg-blue-50 transition-colors flex flex-col items-center gap-1">
+                          <Icon name="cloud-lightning" size={16}/> Teste Nuvem
                        </button>
                     </div>
                  )}
@@ -291,38 +342,46 @@
 
               {/* PASSO 2: HORÁRIOS */}
               <div className="card">
-                 <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
-                    <span className="bg-gray-200 w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
-                    Meus Horários
-                 </h3>
+                 <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-500">2</div>
+                    <h3 className="font-bold text-lg text-gray-800">Horários</h3>
+                 </div>
                  
-                 <div className="space-y-4">
-                    <div>
-                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Entrada</label>
-                       <input type="time" value={config.entrada} onChange={e => setConfig({...config, entrada: e.target.value})} className="w-full p-3 border rounded-xl bg-gray-50 font-bold text-lg text-center" />
+                 <div className="space-y-5">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                           <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">Entrada</label>
+                           <div className="relative">
+                              <input type="time" value={config.entrada} onChange={e => setConfig({...config, entrada: e.target.value})} className="w-full p-3 pl-4 border border-gray-200 rounded-xl bg-gray-50 font-bold text-gray-800 text-lg text-center outline-none focus:border-blue-500 transition-colors" />
+                           </div>
+                        </div>
+                        <div>
+                           <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 tracking-wider">Saída</label>
+                           <div className="relative">
+                              <input type="time" value={config.saida} onChange={e => setConfig({...config, saida: e.target.value})} className="w-full p-3 pl-4 border border-gray-200 rounded-xl bg-gray-50 font-bold text-gray-800 text-lg text-center outline-none focus:border-blue-500 transition-colors" />
+                           </div>
+                        </div>
                     </div>
+
                     <div>
-                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Saída</label>
-                       <input type="time" value={config.saida} onChange={e => setConfig({...config, saida: e.target.value})} className="w-full p-3 border rounded-xl bg-gray-50 font-bold text-lg text-center" />
-                    </div>
-                    <div>
-                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Avisar Antes (Minutos)</label>
-                       <select value={config.antecedencia} onChange={e => setConfig({...config, antecedencia: e.target.value})} className="w-full p-3 border rounded-xl bg-gray-50">
-                          <option value="1">1 minuto antes</option>
-                          <option value="5">5 minutos antes</option>
-                          <option value="10">10 minutos antes</option>
-                          <option value="15">15 minutos antes</option>
-                          <option value="30">30 minutos antes</option>
-                       </select>
+                       <label className="block text-[10px] font-bold text-gray-400 uppercase mb-2 tracking-wider flex items-center gap-1"><Icon name="clock" size={12}/> Antecedência do Alerta</label>
+                       <div className="relative">
+                          <select value={config.antecedencia} onChange={e => setConfig({...config, antecedencia: e.target.value})} className="w-full p-3 border border-gray-200 rounded-xl bg-white text-gray-700 font-medium appearance-none outline-none focus:border-blue-500 transition-colors">
+                             <option value="1">1 minuto antes</option>
+                             <option value="5">5 minutos antes</option>
+                             <option value="10">10 minutos antes (Padrão)</option>
+                             <option value="15">15 minutos antes</option>
+                             <option value="30">30 minutos antes</option>
+                          </select>
+                          <div className="absolute right-3 top-3.5 text-gray-400 pointer-events-none"><Icon name="chevron-down" size={16}/></div>
+                       </div>
                     </div>
                  </div>
 
-                 <button onClick={saveConfig} disabled={loading} className="w-full mt-6 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 disabled:opacity-70">
-                    {loading ? 'Salvando...' : 'Salvar Configuração'}
+                 <button onClick={saveConfig} disabled={loading} className="w-full mt-8 bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-blue-200 active:scale-95 hover:bg-blue-700 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:scale-100">
+                    {loading ? <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div> : 'Salvar Alterações'}
                  </button>
-                 {statusMsg && <p className="text-center text-green-600 text-sm mt-2 font-bold fade-in">{statusMsg}</p>}
               </div>
-
            </div>
         );
       }
